@@ -12,8 +12,9 @@ contract Loaner {
     address payable owner;
 
     // setting owner
-    constructor() {
+    constructor() payable {
         owner = payable(msg.sender);
+        payable(address(this)).transfer(10 ether);
         emit ContractDeployed(owner, address(this));
     }
 
@@ -49,7 +50,7 @@ contract Loaner {
 
     // to check the max limit
     function checkCredibility(uint256 _interestRate, uint256 _installments)
-        public
+        internal
         returns (uint256)
     {
         // getting reputation of a user
@@ -121,8 +122,7 @@ contract Loaner {
 
         uint256 remainngInstallments = _totalInstallments - 1;
 
-        uint256 nextToPay = remainingAmount +
-            ((_interestRate * remainingAmount) / 100);
+        uint256 nextToPay = iToPay + ((_interestRate * remainingAmount) / 100);
 
         // setting next installment to 1 if it's zero
         if (nextToPay == 0) {
@@ -149,13 +149,91 @@ contract Loaner {
         loanActive[msg.sender] = true;
 
         // transfer money into user's account (amount - 1st installment)
-        payable(msg.sender).transfer(_amount - iToPay * 10**18);
+        uint256 toTransfer = (_amount - iToPay) * 10**18;
+        payable(msg.sender).transfer(toTransfer);
 
-        emit LoanTaken(msg.sender, loan);
+        emit LoanDetails(
+            msg.sender,
+            _amount,
+            remainingAmount,
+            _interestRate,
+            peneltyAmount,
+            nextToPay
+        );
     }
 
-    function getLoanInfo() public view returns (Loan memory) {
-        return getLoan[msg.sender];
+    function payInstallment() public payable {
+        // loan needs to be active
+        require(loanActive[msg.sender], "You have repayed the loan");
+
+        // get loan
+        Loan storage loan = getLoan[msg.sender];
+
+        // get installment
+        uint256 installment = loan.nextAmount;
+
+        // if penelty (add it here)
+        if (loan.nextPayment < block.timestamp) {
+            installment += loan.penelty;
+        }
+
+        // if this was the last installment set false (todo)
+
+        if (loan.remainingInstallments - 1 >= 0) {
+            // update remaining amount and installments
+            loan.remainingAmount -= loan.nextAmount;
+            loan.remainingInstallments -= 1;
+            loan.lastPayment = block.timestamp;
+            loan.lastAmount = installment;
+            loan.nextPayment = block.timestamp + loan.timeBetweenInstallments;
+
+            uint256 iToPay = loan.amount / loan.totalInstallments;
+
+            // setting next installment to remaining if it's zero
+            if (iToPay == 0) {
+                iToPay = loan.remainingAmount;
+            }
+
+            loan.nextAmount =
+                iToPay +
+                ((loan.interest * loan.remainingAmount) / 100);
+
+            // pay installment
+            (bool sent, ) = msg.sender.call{value: installment}("");
+            require(sent, "Fund Transfer Error");
+        } else {
+            loanActive[msg.sender] = false;
+        }
+
+        emit LoanDetails(
+            msg.sender,
+            loan.amount,
+            loan.remainingAmount,
+            loan.interest,
+            loan.interest,
+            loan.nextAmount
+        );
+    }
+
+    function getLoanInfo()
+        public
+        view
+        returns (
+            uint256 amount,
+            uint256 remainingAmount,
+            uint256 remainngInstallments,
+            uint256 nextPayment,
+            uint256 interest
+        )
+    {
+        Loan memory l = getLoan[msg.sender];
+        return (
+            l.amount,
+            l.remainingAmount,
+            l.remainingInstallments,
+            l.nextAmount,
+            l.interest
+        );
     }
 
     event ContractDeployed(
@@ -163,5 +241,12 @@ contract Loaner {
         address indexed contractAddress
     );
     event CredibilityCheck(User indexed user, uint256 indexed credibleAmount);
-    event LoanTaken(address indexed user, Loan indexed loanDetails);
+    event LoanDetails(
+        address user,
+        uint256 loanAmount,
+        uint256 remainingAmount,
+        uint256 interestRate,
+        uint256 peneltyAmount,
+        uint256 nextInstallment
+    );
 }
